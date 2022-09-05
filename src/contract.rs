@@ -4,8 +4,8 @@ use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response,
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetCountResponse, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::msg::{ExecuteMsg, InstantiateMsg};
+use crate::state::{OWNER};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-token";
@@ -15,20 +15,13 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    info: MessageInfo,
+    _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let state = State {
-        count: msg.count,
-        owner: info.sender.clone(),
-    };
-    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    STATE.save(deps.storage, &state)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender)
-        .add_attribute("count", msg.count.to_string()))
+    let owner = deps.api.addr_validate(&msg.owner)?;
+    OWNER.save(deps.storage, &owner)?;
+    let res = Response::new();
+    Ok(res)
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -38,67 +31,40 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
-    match msg {
-        ExecuteMsg::Increment {} => try_increment(deps),
-        ExecuteMsg::Reset { count } => try_reset(deps, info, count),
-    }
-}
-
-pub fn try_increment(deps: DepsMut) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        state.count += 1;
-        Ok(state)
-    })?;
-
-    Ok(Response::new().add_attribute("method", "try_increment"))
-}
-
-pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        if info.sender != state.owner {
-            return Err(ContractError::Unauthorized {});
-        }
-        state.count = count;
-        Ok(state)
-    })?;
-    Ok(Response::new().add_attribute("method", "reset"))
+    unimplemented!();
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
-    match msg {
-        QueryMsg::GetCount {} => to_binary(&query_count(deps)?),
-    }
-}
-
-fn query_count(deps: Deps) -> StdResult<GetCountResponse> {
-    let state = STATE.load(deps.storage)?;
-    Ok(GetCountResponse { count: state.count })
+pub fn query(deps: Deps, _env: Env) -> StdResult<Binary> {
+    let owner = OWNER.load(deps.storage)?;
+    to_binary(&owner)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coins, from_binary};
+    use cosmwasm_std::{coins, from_binary, Addr};
 
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies();
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = InstantiateMsg { owner: String::from("creator") };
+        let info = mock_info("creator", &[]);
 
         // we can just call .unwrap() to assert this was a success
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(0, res.messages.len());
 
         // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
+        let res = query(deps.as_ref(), mock_env()).unwrap();
+        let value: Addr = from_binary(&res).unwrap();
+        assert_eq!("creator", value.as_str());
+        assert_ne!("othercreator", value.as_str());
     }
 
+    /*
     #[test]
     fn increment() {
         let mut deps = mock_dependencies();
@@ -145,4 +111,5 @@ mod tests {
         let value: GetCountResponse = from_binary(&res).unwrap();
         assert_eq!(5, value.count);
     }
+    */
 }
