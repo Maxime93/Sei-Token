@@ -1,11 +1,11 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Addr};
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg};
-use crate::state::{OWNER};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::{Config, CONFIG};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-token";
@@ -15,13 +15,25 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let owner = deps.api.addr_validate(&msg.owner)?;
-    OWNER.save(deps.storage, &owner)?;
-    let res = Response::new();
-    Ok(res)
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    let owner = msg
+        .owner
+        .and_then(|addr_string| deps.api.addr_validate(addr_string.as_str()).ok())
+        .unwrap_or(info.sender);
+
+    let config = Config {
+        owner: owner.clone(),
+    };
+
+    CONFIG.save(deps.storage, &config)?;
+
+    Ok(Response::new()
+        .add_attribute("method", "instantiate")
+        .add_attribute("owner", owner))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -35,9 +47,15 @@ pub fn execute(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, _env: Env) -> StdResult<Binary> {
-    let owner = OWNER.load(deps.storage)?;
-    to_binary(&owner)
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+    match msg {
+        QueryMsg::QueryOwner {} => to_binary(&query_owner(deps)),
+    }
+}
+
+fn query_owner (deps: Deps) -> Config {
+    let owner = CONFIG.load(deps.storage).unwrap();
+    owner
 }
 
 #[cfg(test)]
@@ -49,19 +67,56 @@ mod tests {
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies();
-
-        let msg = InstantiateMsg { owner: String::from("creator") };
+        let env = mock_env();
         let info = mock_info("creator", &[]);
 
-        // we can just call .unwrap() to assert this was a success
-        let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        //no owner specified in the instantiation message
+        let msg = InstantiateMsg { owner: None };
+
+        let res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
         assert_eq!(0, res.messages.len());
 
         // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env()).unwrap();
-        let value: Addr = from_binary(&res).unwrap();
-        assert_eq!("creator", value.as_str());
-        assert_ne!("othercreator", value.as_str());
+        let state = CONFIG.load(&deps.storage).unwrap();
+        assert_eq!(
+            state,
+            Config {
+                owner: Addr::unchecked("creator".to_string()),
+            }
+        );
+
+        //specifying an owner address in the instantiation message
+        let msg = InstantiateMsg {
+            owner: Some("specified_owner".to_string()),
+        };
+
+        let res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        assert_eq!(0, res.messages.len());
+
+        // it worked, let's query the state
+        let state = CONFIG.load(&deps.storage).unwrap();
+        assert_eq!(
+            state,
+            Config {
+                owner: Addr::unchecked("specified_owner".to_string()),
+            }
+        );
+
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::QueryOwner {  },
+        ).unwrap();
+        let config: Config = from_binary(&res).unwrap();
+        assert_eq!(
+            config.owner.to_string(),
+            "specified_owner"
+        );
+        assert_ne!(
+            config.owner.to_string(),
+            "not_owner"
+        );
+
     }
 
     /*
