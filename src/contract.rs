@@ -51,7 +51,51 @@ pub fn execute(
             target_addr_2,
             receive_msg,
         } => execute_create_pot(deps, info, target_addr_1, target_addr_2, receive_msg),
+        ExecuteMsg::WithdrawPot {
+            amount
+        } => execute_withdraw_pot(deps, info, amount),
     }
+}
+
+pub fn execute_withdraw_pot(
+    deps: DepsMut,
+    info: MessageInfo,
+    amount: Uint128,
+) -> Result<Response, ContractError> {
+    // address that requested the withdrawl
+    let address_request = info.sender;
+    let str_address_request = address_request.to_string();
+    // Find the address in POTS. Error if not found.
+    let mut p = POTS.load(deps.storage, address_request.as_str())?;
+    // Verify the amount is correct
+    if amount > p.collected {
+        return Err(ContractError::CustomError { val:"Wrong amount to withdraw".to_string() });
+    }
+    // Making sure address_request is equal to target address in pot.
+    if address_request != p.target_addr {
+        // This check is quite useless
+        return Err(ContractError::CustomError { val:"Wrong address to withdraw".to_string() });
+    }
+
+    let mut res = Response::new()
+        .add_attribute("action", "withdraw")
+        .add_attribute("address", p.target_addr.to_string());
+
+    // let cw20_addr = address_request;
+    let cw20 = Cw20Contract(deps.api.addr_validate("usei")?);
+    let msg = cw20.call(Cw20ExecuteMsg::Transfer {
+        recipient: address_request.into_string(),
+        amount: amount,
+    })?;
+
+    res = res.add_message(msg);
+
+    POTS.remove(deps.storage, &str_address_request);
+    if amount < p.collected {
+        p.collected = p.collected - amount;
+        POTS.save(deps.storage, p.target_addr.as_str(), &p);
+    }
+    Ok(res)
 }
 
 pub fn execute_create_pot(
@@ -81,7 +125,6 @@ pub fn execute_create_pot(
     };
 
     save_pot(deps, &pot1, &pot2)?;
-    // save_pot(deps, &pot2)?;
     Ok(Response::new()
         .add_attribute("action", "execute_create_pot")
         .add_attribute("target_addr_1", target_addr_1)
@@ -116,6 +159,77 @@ mod tests {
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{coins, from_binary, Addr};
+
+    #[test]
+    fn test_withdraw() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let mut info = mock_info("creator", &[]);
+
+        let msg = InstantiateMsg { owner: None };
+        let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // should create pot
+        let msg = ExecuteMsg::CreatePot {
+            target_addr_1: String::from("alice"),
+            target_addr_2: String::from("bob"),
+            receive_msg: Cw20ReceiveMsg {
+                sender: String::from("cw20"),
+                amount: Uint128::new(100),
+                msg: to_binary(&ReceiveMsg::Send { id: Uint64::new(1) }).unwrap(),
+            }
+        };
+        info.sender = Addr::unchecked("usei");
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        assert_eq!(res.messages.len(), 0);
+
+        // query pot
+        let msg = QueryMsg::GetPot { addr: "alice".to_string() };
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let pot: Pot = from_binary(&res).unwrap();
+        assert_eq!(
+            pot,
+            Pot {
+                target_addr: Addr::unchecked("alice"),
+                collected: Uint128::new(50)
+            }
+        );
+
+        // Withdraw pot
+        let msg = ExecuteMsg::WithdrawPot { amount: Uint128::new(25) };
+        info.sender = Addr::unchecked("alice");
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query pot
+        let msg = QueryMsg::GetPot { addr: "alice".to_string() };
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let pot: Pot = from_binary(&res).unwrap();
+        assert_eq!(
+            pot,
+            Pot {
+                target_addr: Addr::unchecked("alice"),
+                collected: Uint128::new(25)
+            }
+        );
+
+        // Withdraw pot
+        let msg = ExecuteMsg::WithdrawPot { amount: Uint128::new(45) };
+        let info = mock_info("bob", &[]);
+        // info.sender = Addr::unchecked("bob");
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query pot
+        let msg = QueryMsg::GetPot { addr: "bob".to_string() };
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let pot: Pot = from_binary(&res).unwrap();
+        assert_eq!(
+            pot,
+            Pot {
+                target_addr: Addr::unchecked("bob"),
+                collected: Uint128::new(5)
+            }
+        );
+    }
 
     #[test]
     fn test_create_pot() {

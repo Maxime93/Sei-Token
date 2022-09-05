@@ -18,6 +18,10 @@ pub enum ExecuteMsg {
         target_addr_2: String,
         receive_msg: Cw20ReceiveMsg,
     },
+    WithdrawPot {
+        // The amount you want to withdraw
+        amount: Uint128,
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
