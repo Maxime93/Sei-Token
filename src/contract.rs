@@ -1,11 +1,13 @@
+use std::ops::{Div, Add};
+
 #[cfg(not(feature = "library"))]
-use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Addr};
+use cosmwasm_std::{from_binary, entry_point, to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, Uint64};
+use cw20::{Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg};
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{Config, CONFIG};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ReceiveMsg, PotResponse};
+use crate::state::{Config, CONFIG, Pot, POTS, save_pot};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-token";
@@ -43,19 +45,70 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
-    unimplemented!();
+    match msg {
+        ExecuteMsg::CreatePot {
+            target_addr_1,
+            target_addr_2,
+            receive_msg,
+        } => execute_create_pot(deps, info, target_addr_1, target_addr_2, receive_msg),
+    }
+}
+
+pub fn execute_create_pot(
+    deps: DepsMut,
+    info: MessageInfo,
+    target_addr_1: String,
+    target_addr_2: String,
+    wrapped: Cw20ReceiveMsg,
+) -> Result<Response, ContractError> {
+
+    // This only works for usei token
+    if info.sender != "usei" {
+        return Err(ContractError::CustomError { val:"Wrong token".to_string() });
+    }
+    if wrapped.amount == Uint128::new(0) {
+        return Err(ContractError::CustomError { val:"No token sent".to_string() });
+    }
+
+    let amount_for_each_pot = wrapped.amount.div(Uint128::new(2));
+    let pot1 = Pot {
+        target_addr: deps.api.addr_validate(target_addr_1.as_str())?,
+        collected: amount_for_each_pot,
+    };
+    let pot2 = Pot {
+        target_addr: deps.api.addr_validate(target_addr_2.as_str())?,
+        collected: amount_for_each_pot,
+    };
+
+    save_pot(deps, &pot1, &pot2)?;
+    // save_pot(deps, &pot2)?;
+    Ok(Response::new()
+        .add_attribute("action", "execute_create_pot")
+        .add_attribute("target_addr_1", target_addr_1)
+        .add_attribute("target_addr_2", target_addr_2)
+    )
+
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::QueryOwner {} => to_binary(&query_owner(deps)),
+        QueryMsg::GetPot { addr } => to_binary(&query_pot(deps, &addr)?),
     }
 }
 
 fn query_owner (deps: Deps) -> Config {
     let owner = CONFIG.load(deps.storage).unwrap();
     owner
+}
+
+fn query_pot(deps: Deps, addr: &str) -> StdResult<PotResponse> {
+    let pot = POTS.load(deps.storage, addr)?;
+    Ok(PotResponse {
+        target_addr: pot.target_addr.into_string(),
+        collected: pot.collected.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -65,6 +118,94 @@ mod tests {
     use cosmwasm_std::{coins, from_binary, Addr};
 
     #[test]
+    fn test_create_pot() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let mut info = mock_info("creator", &[]);
+
+        let msg = InstantiateMsg { owner: None };
+        let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // should create pot
+        let msg = ExecuteMsg::CreatePot {
+            target_addr_1: String::from("alice"),
+            target_addr_2: String::from("bob"),
+            receive_msg: Cw20ReceiveMsg {
+                sender: String::from("cw20"),
+                amount: Uint128::new(100),
+                msg: to_binary(&ReceiveMsg::Send { id: Uint64::new(1) }).unwrap(),
+            }
+        };
+        info.sender = Addr::unchecked("usei");
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        assert_eq!(res.messages.len(), 0);
+
+        // should create pot
+        let msg = ExecuteMsg::CreatePot {
+            target_addr_1: String::from("max"),
+            target_addr_2: String::from("jane"),
+            receive_msg: Cw20ReceiveMsg {
+                sender: String::from("cw20"),
+                amount: Uint128::new(100),
+                msg: to_binary(&ReceiveMsg::Send { id: Uint64::new(1) }).unwrap(),
+            }
+        };
+        info.sender = Addr::unchecked("usei");
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        assert_eq!(res.messages.len(), 0);
+
+        // should create pot
+        let msg = ExecuteMsg::CreatePot {
+            target_addr_1: String::from("karren"),
+            target_addr_2: String::from("john"),
+            receive_msg: Cw20ReceiveMsg {
+                sender: String::from("cw20"),
+                amount: Uint128::new(100),
+                msg: to_binary(&ReceiveMsg::Send { id: Uint64::new(1) }).unwrap(),
+            }
+        };
+        info.sender = Addr::unchecked("usei");
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        assert_eq!(res.messages.len(), 0);
+
+        // query pot
+        let msg = QueryMsg::GetPot { addr: "alice".to_string() };
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let pot: Pot = from_binary(&res).unwrap();
+        assert_eq!(
+            pot,
+            Pot {
+                target_addr: Addr::unchecked("alice"),
+                collected: Uint128::new(50)
+            }
+        );
+
+        // query pot
+        let msg = QueryMsg::GetPot { addr: "bob".to_string() };
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let pot: Pot = from_binary(&res).unwrap();
+        assert_eq!(
+            pot,
+            Pot {
+                target_addr: Addr::unchecked("bob"),
+                collected: Uint128::new(50)
+            }
+        );
+
+        // query pot
+        let msg = QueryMsg::GetPot { addr: "karren".to_string() };
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let pot: Pot = from_binary(&res).unwrap();
+        assert_eq!(
+            pot,
+            Pot {
+                target_addr: Addr::unchecked("karren"),
+                collected: Uint128::new(50)
+            }
+        );
+    }
+
+    #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies();
         let env = mock_env();
@@ -72,7 +213,6 @@ mod tests {
 
         //no owner specified in the instantiation message
         let msg = InstantiateMsg { owner: None };
-
         let res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
         assert_eq!(0, res.messages.len());
 
