@@ -36,6 +36,7 @@ pub enum ReceiveMsg {
 pub enum QueryMsg {
     QueryOwner {},
     GetPot { addr: String },
+    GetFees {},
 }
 
 // We define a custom struct for each query response
@@ -43,6 +44,12 @@ pub enum QueryMsg {
 pub struct PotResponse {
     /// target_addr is the address that will receive the pot
     pub target_addr: String,
+    /// collected keeps information on how much is collected for this pot.
+    pub collected: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct FeesResponse {
     /// collected keeps information on how much is collected for this pot.
     pub collected: String,
 }

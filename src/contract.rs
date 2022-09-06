@@ -7,7 +7,10 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ReceiveMsg, PotResponse};
-use crate::state::{Config, CONFIG, Pot, POTS, save_pot};
+use crate::state::{Config, CONFIG, Pot, POTS, save_pot, FEES, ContractFees};
+
+// You only need to import the `Percentage` struct
+use percentage::Percentage;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:sei-token";
@@ -31,6 +34,10 @@ pub fn instantiate(
         owner: owner.clone(),
     };
 
+    let fees = ContractFees {
+        collected: Uint128::new(0)
+    };
+    FEES.save(deps.storage, &fees)?;
     CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new()
@@ -71,6 +78,10 @@ pub fn execute_withdraw_pot(
     if amount > p.collected {
         return Err(ContractError::CustomError { val:"Wrong amount to withdraw".to_string() });
     }
+
+    let amount_fees = amount.multiply_ratio(Uint128::new(1), Uint128::new(100));
+    let amount_user = amount - amount_fees;
+
     // Making sure address_request is equal to target address in pot.
     if address_request != p.target_addr {
         // This check is quite useless
@@ -85,7 +96,7 @@ pub fn execute_withdraw_pot(
     let cw20 = Cw20Contract(deps.api.addr_validate("usei")?);
     let msg = cw20.call(Cw20ExecuteMsg::Transfer {
         recipient: address_request.into_string(),
-        amount: amount,
+        amount: amount_user,
     })?;
 
     res = res.add_message(msg);
@@ -93,8 +104,13 @@ pub fn execute_withdraw_pot(
     POTS.remove(deps.storage, &str_address_request);
     if amount < p.collected {
         p.collected = p.collected - amount;
-        POTS.save(deps.storage, p.target_addr.as_str(), &p);
+        POTS.save(deps.storage, p.target_addr.as_str(), &p)?;
     }
+
+    let mut fees = FEES.load(deps.storage)?;
+    fees.collected = fees.collected + amount_fees;
+    FEES.save(deps.storage, &fees)?;
+
     Ok(res)
 }
 
@@ -138,7 +154,13 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::QueryOwner {} => to_binary(&query_owner(deps)),
         QueryMsg::GetPot { addr } => to_binary(&query_pot(deps, &addr)?),
+        QueryMsg::GetFees {} => to_binary(&query_fees(deps)),
     }
+}
+
+fn query_fees (deps: Deps) -> ContractFees {
+    let fees = FEES.load(deps.storage).unwrap();
+    fees
 }
 
 fn query_owner (deps: Deps) -> Config {
@@ -175,7 +197,7 @@ mod tests {
             target_addr_2: String::from("bob"),
             receive_msg: Cw20ReceiveMsg {
                 sender: String::from("cw20"),
-                amount: Uint128::new(100),
+                amount: Uint128::new(1000),
                 msg: to_binary(&ReceiveMsg::Send { id: Uint64::new(1) }).unwrap(),
             }
         };
@@ -191,12 +213,12 @@ mod tests {
             pot,
             Pot {
                 target_addr: Addr::unchecked("alice"),
-                collected: Uint128::new(50)
+                collected: Uint128::new(500)
             }
         );
 
         // Withdraw pot
-        let msg = ExecuteMsg::WithdrawPot { amount: Uint128::new(25) };
+        let msg = ExecuteMsg::WithdrawPot { amount: Uint128::new(100) };
         info.sender = Addr::unchecked("alice");
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
@@ -208,14 +230,24 @@ mod tests {
             pot,
             Pot {
                 target_addr: Addr::unchecked("alice"),
-                collected: Uint128::new(25)
+                collected: Uint128::new(400)
+            }
+        );
+
+        // query fees
+        let msg = QueryMsg::GetFees {};
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let fees: ContractFees = from_binary(&res).unwrap();
+        assert_eq!(
+            fees,
+            ContractFees {
+                collected: Uint128::new(1)
             }
         );
 
         // Withdraw pot
-        let msg = ExecuteMsg::WithdrawPot { amount: Uint128::new(45) };
+        let msg = ExecuteMsg::WithdrawPot { amount: Uint128::new(100) };
         let info = mock_info("bob", &[]);
-        // info.sender = Addr::unchecked("bob");
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         // query pot
@@ -226,7 +258,18 @@ mod tests {
             pot,
             Pot {
                 target_addr: Addr::unchecked("bob"),
-                collected: Uint128::new(5)
+                collected: Uint128::new(400)
+            }
+        );
+
+        // query fees
+        let msg = QueryMsg::GetFees {};
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let fees: ContractFees = from_binary(&res).unwrap();
+        assert_eq!(
+            fees,
+            ContractFees {
+                collected: Uint128::new(2)
             }
         );
     }
@@ -372,53 +415,4 @@ mod tests {
         );
 
     }
-
-    /*
-    #[test]
-    fn increment() {
-        let mut deps = mock_dependencies();
-
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // beneficiary can release it
-        let info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Increment {};
-        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // should increase counter by 1
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
-    }
-
-    #[test]
-    fn reset() {
-        let mut deps = mock_dependencies();
-
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // beneficiary can release it
-        let unauth_info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-        match res {
-            Err(ContractError::Unauthorized {}) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
-
-        // only the original creator can reset the counter
-        let auth_info = mock_info("creator", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
-
-        // should now be 5
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: GetCountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
-    }
-    */
 }
