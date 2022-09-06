@@ -18,11 +18,20 @@ pub struct Pot {
     pub collected: Uint128,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ContractFees {
+    // collected keeps information on how much fees this contract has collected.
+    pub collected: Uint128,
+}
+
+/// POT_SEQ holds the last pot ID
+pub const FEES: Item<ContractFees> = Item::new("fee");
+
 /// POT_SEQ holds the last pot ID
 pub const POTS: Map<&str, Pot> = Map::new("pot");
 
 pub fn save_pot(deps: DepsMut, pot1: &Pot, pot2: &Pot,) -> StdResult<()> {
     // save pot with id
-    POTS.save(deps.storage, pot1.target_addr.as_str(), pot1);
+    POTS.save(deps.storage, pot1.target_addr.as_str(), pot1)?;
     POTS.save(deps.storage, pot2.target_addr.as_str(), pot2)
 }
